@@ -12,40 +12,79 @@ st.set_page_config(page_title="Simulador Tributario", page_icon="🧾", layout="
 CAMPOS_NO_MONEDA = {"num_dependientes", "num_declaracion"}
 CAMPOS_MONEDA_DECLARACION = [c for c in CAMPOS_DECLARACION if c not in CAMPOS_NO_MONEDA]
 
+# ----------------------------------------------------------------------
+# Utilidades de Persistencia y Formato
+# ----------------------------------------------------------------------
+# Streamlit borra los widgets al cambiar de sección. Para evitar que 
+# los cálculos den cero, guardamos todo en un diccionario "maestro" persistente.
+if "datos" not in st.session_state:
+    st.session_state.datos = {
+        "perfil_empleo": True,
+        "perfil_honorarios": False,
+        "num_dependientes": 0,
+        "num_declaracion": "Primera vez"
+    }
 
-# ----------------------------------------------------------------------
-# Utilidades de formato de pesos colombianos
-# ----------------------------------------------------------------------
-def formatear_pesos(valor: str) -> str:
-    solo_digitos = "".join(c for c in str(valor) if c.isdigit())
+def guardar_todo():
+    """Copia el valor de los widgets visibles al diccionario maestro."""
+    for k, v in st.session_state.items():
+        if k.endswith("_widget"):
+            real_k = k.replace("_widget", "")
+            st.session_state.datos[real_k] = v
+
+def formatear_pesos(valor) -> str:
+    v_str = str(valor).split('.')[0] # Ignorar decimales si llega un float
+    solo_digitos = "".join(c for c in v_str if c.isdigit())
     if not solo_digitos:
         return ""
     solo_digitos = solo_digitos.lstrip("0") or "0"
     return f"{int(solo_digitos):,}".replace(",", ".")
 
-
-def campo_moneda(label, campo_key, ayuda="", valor_defecto=0):
-    """Campo de dinero. Se reformatea con puntos de miles justo ANTES de
-    dibujarse en cada ejecución -nunca después-, que es la única forma
-    que Streamlit permite modificar el valor guardado de un widget."""
-    if campo_key not in st.session_state:
-        st.session_state[campo_key] = formatear_pesos(str(int(valor_defecto))) if valor_defecto else ""
-    else:
-        st.session_state[campo_key] = formatear_pesos(st.session_state[campo_key])
-    st.text_input(f"{label} ($)", key=campo_key, placeholder="0", help=ayuda or None)
-
+def obtener(campo_key, default=0.0):
+    """Obtiene el valor del diccionario maestro."""
+    return st.session_state.datos.get(campo_key, default)
 
 def valor_numerico(campo_key) -> float:
-    """Convierte a número el texto guardado por un campo_moneda."""
-    texto = st.session_state.get(campo_key, "")
+    """Extrae el valor numérico del diccionario maestro para hacer cálculos."""
+    texto = st.session_state.datos.get(campo_key, "")
     solo_digitos = "".join(c for c in str(texto) if c.isdigit())
     return float(solo_digitos) if solo_digitos else 0.0
 
+# ----------------------------------------------------------------------
+# Wrappers (Envoltorios) para campos en pantalla
+# ----------------------------------------------------------------------
+def campo_moneda(label, campo_key, ayuda="", valor_defecto=0):
+    w_key = f"{campo_key}_widget"
+    if w_key not in st.session_state:
+        val = st.session_state.datos.get(campo_key, valor_defecto)
+        st.session_state[w_key] = formatear_pesos(val) if val else ""
+    else:
+        st.session_state[w_key] = formatear_pesos(st.session_state[w_key])
+    st.text_input(f"{label} ($)", key=w_key, placeholder="0", help=ayuda or None)
 
-def obtener(campo_key, default=0.0):
-    """Para campos que NO son de dinero (checkbox, selectbox, number_input, texto libre)."""
-    return st.session_state.get(campo_key, default)
+def campo_texto(label, campo_key, ayuda=""):
+    w_key = f"{campo_key}_widget"
+    if w_key not in st.session_state:
+        st.session_state[w_key] = st.session_state.datos.get(campo_key, "")
+    st.text_input(label, key=w_key, help=ayuda or None)
 
+def campo_selectbox(label, opciones, campo_key, ayuda=""):
+    w_key = f"{campo_key}_widget"
+    if w_key not in st.session_state:
+        st.session_state[w_key] = st.session_state.datos.get(campo_key, opciones[0])
+    st.selectbox(label, opciones, key=w_key, help=ayuda or None)
+
+def campo_numero(label, min_v, max_v, campo_key, ayuda=""):
+    w_key = f"{campo_key}_widget"
+    if w_key not in st.session_state:
+        st.session_state[w_key] = st.session_state.datos.get(campo_key, min_v)
+    st.number_input(label, min_value=min_v, max_value=max_v, step=1, key=w_key, help=ayuda or None)
+
+def campo_checkbox(label, campo_key, default=False, ayuda=""):
+    w_key = f"{campo_key}_widget"
+    if w_key not in st.session_state:
+        st.session_state[w_key] = st.session_state.datos.get(campo_key, default)
+    st.checkbox(label, key=w_key, help=ayuda or None, on_change=guardar_todo)
 
 # ----------------------------------------------------------------------
 # Navegación
@@ -61,13 +100,13 @@ seccion = st.sidebar.radio("Ir a:", SECCIONES, label_visibility="collapsed")
 st.title(seccion)
 
 # ----------------------------------------------------------------------
-# 0. Perfil (checkboxes: no necesitan formulario, un clic ya es una
-# interacción completa y no compite con la navegación)
+# 0. Perfil
 # ----------------------------------------------------------------------
 if seccion == "0. Perfil":
     st.write("Cuéntanos brevemente tu situación. Así solo te mostramos las preguntas que te aplican.")
-    st.checkbox("Tuve empleo (recibí salario)", key="perfil_empleo", value=True)
-    st.checkbox("Tuve honorarios o un negocio propio (trabajo independiente)", key="perfil_honorarios", value=False)
+    campo_checkbox("Tuve empleo (recibí salario)", "perfil_empleo", default=True)
+    campo_checkbox("Tuve honorarios o un negocio propio (trabajo independiente)", "perfil_honorarios", default=False)
+    
     if not obtener("perfil_empleo", True) and not obtener("perfil_honorarios", False):
         st.warning("Si no tuviste ninguno de los dos, es probable que no necesites declarar renta — revisa la pantalla '9. Topes y Obligación' para confirmarlo.")
     st.caption("Puedes cambiar esto en cualquier momento; los campos de Ingresos y Deducciones se ajustan solos.")
@@ -78,13 +117,13 @@ if seccion == "0. Perfil":
 elif seccion == "1. Datos Personales":
     st.caption("Estos datos no afectan el cálculo del impuesto; se usarán más adelante para diligenciar tu Formulario 210.")
     with st.form("form_datos_personales"):
-        st.text_input("Nombres y apellidos", key="dp_nombre")
-        st.selectbox("Tipo de documento", ["Cédula de ciudadanía", "Cédula de extranjería", "Pasaporte", "NIT"], key="dp_tipo_doc")
-        st.text_input("Número de documento", key="dp_num_doc")
-        st.text_input("Ciudad", key="dp_ciudad")
-        st.text_input("Dirección", key="dp_direccion")
-        st.text_input("Correo electrónico", key="dp_correo")
-        guardado = st.form_submit_button("💾 Guardar esta sección")
+        campo_texto("Nombres y apellidos", "dp_nombre")
+        campo_selectbox("Tipo de documento", ["Cédula de ciudadanía", "Cédula de extranjería", "Pasaporte", "NIT"], "dp_tipo_doc")
+        campo_texto("Número de documento", "dp_num_doc")
+        campo_texto("Ciudad", "dp_ciudad")
+        campo_texto("Dirección", "dp_direccion")
+        campo_texto("Correo electrónico", "dp_correo")
+        guardado = st.form_submit_button("💾 Guardar esta sección", on_click=guardar_todo)
     if guardado:
         st.success("Guardado.")
 
@@ -102,7 +141,7 @@ elif seccion == "2. Configuración":
             "de 2025). Si dejas el campo vacío, se usa ese valor.",
             valor_defecto=UVT_2026,
         )
-        guardado = st.form_submit_button("💾 Guardar esta sección")
+        guardado = st.form_submit_button("💾 Guardar esta sección", on_click=guardar_todo)
     if guardado:
         st.success("Guardado.")
 
@@ -126,7 +165,7 @@ elif seccion == "3. Activos":
                      "El valor de compra de tus vehículos, sin restar el "
                      "desgaste (Art. 267 E.T.). Es el precio de cuando lo "
                      "compraste, no lo que vale hoy.")
-        guardado = st.form_submit_button("💾 Guardar esta sección")
+        guardado = st.form_submit_button("💾 Guardar esta sección", on_click=guardar_todo)
     if guardado:
         st.success("Guardado.")
 
@@ -145,7 +184,7 @@ elif seccion == "4. Pasivos":
                      "Para que cuenten necesitas un papel que las respalde "
                      "—pagaré, contrato, etc.— (Art. 770 E.T.). Sin eso la "
                      "DIAN no las reconoce.")
-        guardado = st.form_submit_button("💾 Guardar esta sección")
+        guardado = st.form_submit_button("💾 Guardar esta sección", on_click=guardar_todo)
     if guardado:
         st.success("Guardado.")
 
@@ -175,7 +214,7 @@ elif seccion == "5. Ingresos":
                              "E.T.). También va completo; los gastos del "
                              "negocio se restan en la siguiente pantalla, "
                              "Deducciones.")
-            guardado = st.form_submit_button("💾 Guardar esta sección")
+            guardado = st.form_submit_button("💾 Guardar esta sección", on_click=guardar_todo)
         if guardado:
             st.success("Guardado.")
 
@@ -192,16 +231,15 @@ elif seccion == "6. Deducciones":
                      "salud y pensión. La ley no lo cuenta como ingreso "
                      "tuyo, así que se resta de tu base antes de calcular "
                      "el impuesto (Art. 55 y 56 E.T.).")
-        st.number_input(
-            "Cantidad de dependientes (0 a 4)", key="num_dependientes",
-            min_value=0, max_value=4, step=1,
-            help="Cuántas personas dependen de ti económicamente —hijos, "
-            "pareja, papás, etc.—, hasta 4. Con este número el simulador "
-            "calcula dos beneficios: el 10% de tus ingresos laborales, "
-            "tope 384 UVT al año (Art. 387 E.T.), y además 72 UVT fijas "
-            "por cada uno, hasta 4 (Art. 387, adicionado por la Ley 2277 "
-            "de 2022). No necesitas guardar facturas para esto.",
-        )
+        
+        campo_numero("Cantidad de dependientes (0 a 4)", 0, 4, "num_dependientes",
+                     ayuda="Cuántas personas dependen de ti económicamente —hijos, "
+                     "pareja, papás, etc.—, hasta 4. Con este número el simulador "
+                     "calcula dos beneficios: el 10% de tus ingresos laborales, "
+                     "tope 384 UVT al año (Art. 387 E.T.), y además 72 UVT fijas "
+                     "por cada uno, hasta 4 (Art. 387, adicionado por la Ley 2277 "
+                     "de 2022). No necesitas guardar facturas para esto.")
+        
         campo_moneda("Medicina prepagada", "prepagada",
                      "Lo que pagaste en el año por medicina prepagada o "
                      "pólizas de salud, para ti o tu familia. Puedes "
@@ -232,7 +270,7 @@ elif seccion == "6. Deducciones":
                          "ingreso ya no puede tomar además la exención del "
                          "25% del Art. 206 —el simulador aplica ese 25% "
                          "solo a tus salarios—.")
-        guardado = st.form_submit_button("💾 Guardar esta sección")
+        guardado = st.form_submit_button("💾 Guardar esta sección", on_click=guardar_todo)
     if guardado:
         st.success("Guardado.")
 
@@ -260,7 +298,7 @@ elif seccion == "7. Rentas Exentas":
                      "devuelve el 25% de lo donado directamente del "
                      "impuesto ya calculado (Art. 257 E.T.), hasta el 25% "
                      "de ese impuesto.")
-        guardado = st.form_submit_button("💾 Guardar esta sección")
+        guardado = st.form_submit_button("💾 Guardar esta sección", on_click=guardar_todo)
     if guardado:
         st.success("Guardado.")
 
@@ -287,15 +325,16 @@ elif seccion == "8. Anticipo y Retenciones":
                      "si ya habías declarado antes. Si lo llenas, el "
                      "simulador usa el promedio de los dos últimos años "
                      "cuando eso te convenga más (Art. 807 E.T.).")
-        st.selectbox(
+        
+        campo_selectbox(
             "N.º de veces que declaras (con esta)",
             ["Primera vez", "Segunda vez", "Tercera vez o más"],
-            key="num_declaracion",
-            help="Marca si esta es tu primera, segunda o tercera "
+            "num_declaracion",
+            ayuda="Marca si esta es tu primera, segunda o tercera "
             "declaración en adelante. El porcentaje de tu anticipo "
-            "depende de eso: 25%, 50% o 75% (Art. 807 E.T.).",
+            "depende de eso: 25%, 50% o 75% (Art. 807 E.T.)."
         )
-        guardado = st.form_submit_button("💾 Guardar esta sección")
+        guardado = st.form_submit_button("💾 Guardar esta sección", on_click=guardar_todo)
     if guardado:
         st.success("Guardado.")
 
@@ -331,7 +370,7 @@ elif seccion == "10. Resultados":
         datos = {c: valor_numerico(c) for c in CAMPOS_MONEDA_DECLARACION}
         datos["num_dependientes"] = obtener("num_dependientes", 0)
         datos["num_declaracion"] = obtener("num_declaracion", "Primera vez")
-        st.session_state["ultimo_resultado"] = calcular_declaracion(datos, uvt=valor_numerico("uvt"))
+        st.session_state["ultimo_resultado"] = calcular_declaracion(datos, uvt=valor_numerico("uvt") or UVT_2026)
 
     resultado = st.session_state.get("ultimo_resultado")
 
