@@ -25,12 +25,13 @@ def formatear_pesos(valor: str) -> str:
 
 
 def campo_moneda(label, campo_key, ayuda="", valor_defecto=0):
-    """Campo de dinero para usar DENTRO de un st.form. Dentro de un
-    formulario, Streamlit no permite reformatear mientras escribes (no
-    hay rerun hasta que se envía el formulario) -así que se formatea
-    automáticamente apenas le das clic a 'Guardar esta sección'."""
+    """Campo de dinero. Se reformatea con puntos de miles justo ANTES de
+    dibujarse en cada ejecución -nunca después-, que es la única forma
+    que Streamlit permite modificar el valor guardado de un widget."""
     if campo_key not in st.session_state:
         st.session_state[campo_key] = formatear_pesos(str(int(valor_defecto))) if valor_defecto else ""
+    else:
+        st.session_state[campo_key] = formatear_pesos(st.session_state[campo_key])
     st.text_input(f"{label} ($)", key=campo_key, placeholder="0", help=ayuda or None)
 
 
@@ -39,14 +40,6 @@ def valor_numerico(campo_key) -> float:
     texto = st.session_state.get(campo_key, "")
     solo_digitos = "".join(c for c in str(texto) if c.isdigit())
     return float(solo_digitos) if solo_digitos else 0.0
-
-
-def reformatear_campos_moneda(campos):
-    """Llamar justo después de un st.form_submit_button exitoso, para
-    que los campos de dinero de esa sección se vean con puntos de miles."""
-    for c in campos:
-        if c in st.session_state:
-            st.session_state[c] = formatear_pesos(st.session_state[c])
 
 
 def obtener(campo_key, default=0.0):
@@ -111,7 +104,6 @@ elif seccion == "2. Configuración":
         )
         guardado = st.form_submit_button("💾 Guardar esta sección")
     if guardado:
-        reformatear_campos_moneda(["uvt"])
         st.success("Guardado.")
 
 # ----------------------------------------------------------------------
@@ -136,7 +128,6 @@ elif seccion == "3. Activos":
                      "compraste, no lo que vale hoy.")
         guardado = st.form_submit_button("💾 Guardar esta sección")
     if guardado:
-        reformatear_campos_moneda(["casa", "bancos", "vehiculos"])
         st.success("Guardado.")
 
 # ----------------------------------------------------------------------
@@ -156,7 +147,6 @@ elif seccion == "4. Pasivos":
                      "DIAN no las reconoce.")
         guardado = st.form_submit_button("💾 Guardar esta sección")
     if guardado:
-        reformatear_campos_moneda(["deudas_bancos", "deudas_terceros"])
         st.success("Guardado.")
 
 # ----------------------------------------------------------------------
@@ -170,7 +160,6 @@ elif seccion == "5. Ingresos":
     if not tiene_empleo and not tiene_negocio:
         st.info("Ve a la pantalla '0. Perfil' y marca si tuviste empleo o negocio propio, para ver los campos correspondientes aquí.")
     else:
-        campos_esta_seccion = []
         with st.form("form_ingresos"):
             if tiene_empleo:
                 campo_moneda("Salarios y prestaciones", "salarios",
@@ -178,7 +167,6 @@ elif seccion == "5. Ingresos":
                              "año: sueldo, primas, bonos, auxilios (Art. "
                              "103 E.T.). Ponlo completo, sin restar nada "
                              "todavía.")
-                campos_esta_seccion.append("salarios")
             if tiene_negocio:
                 campo_moneda("Honorarios (Independiente)", "honorarios",
                              "Lo que facturaste en el año trabajando de "
@@ -187,10 +175,8 @@ elif seccion == "5. Ingresos":
                              "E.T.). También va completo; los gastos del "
                              "negocio se restan en la siguiente pantalla, "
                              "Deducciones.")
-                campos_esta_seccion.append("honorarios")
             guardado = st.form_submit_button("💾 Guardar esta sección")
         if guardado:
-            reformatear_campos_moneda(campos_esta_seccion)
             st.success("Guardado.")
 
 # ----------------------------------------------------------------------
@@ -200,7 +186,6 @@ elif seccion == "6. Deducciones":
     st.subheader("Deducciones (Bajan tu impuesto)")
     st.caption("Con la cantidad de dependientes que escribas, el simulador ya "
                "calcula automáticamente los DOS beneficios que existen por eso.")
-    campos_esta_seccion = ["salud_pension", "prepagada", "intereses", "gmf", "compras_facturadas"]
     with st.form("form_deducciones"):
         campo_moneda("Salud y Pensión obligatoria", "salud_pension",
                      "Lo que pagaste en el año, de forma obligatoria, a "
@@ -247,10 +232,8 @@ elif seccion == "6. Deducciones":
                          "ingreso ya no puede tomar además la exención del "
                          "25% del Art. 206 —el simulador aplica ese 25% "
                          "solo a tus salarios—.")
-            campos_esta_seccion.append("costos_gastos")
         guardado = st.form_submit_button("💾 Guardar esta sección")
     if guardado:
-        reformatear_campos_moneda(campos_esta_seccion)
         st.success("Guardado.")
 
 # ----------------------------------------------------------------------
@@ -279,7 +262,6 @@ elif seccion == "7. Rentas Exentas":
                      "de ese impuesto.")
         guardado = st.form_submit_button("💾 Guardar esta sección")
     if guardado:
-        reformatear_campos_moneda(["afc", "pensiones_vol", "donaciones"])
         st.success("Guardado.")
 
 # ----------------------------------------------------------------------
@@ -315,7 +297,6 @@ elif seccion == "8. Anticipo y Retenciones":
         )
         guardado = st.form_submit_button("💾 Guardar esta sección")
     if guardado:
-        reformatear_campos_moneda(["retenciones", "anticipo_anterior", "impuesto_anio_anterior"])
         st.success("Guardado.")
 
 # ----------------------------------------------------------------------
