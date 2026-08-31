@@ -1,4 +1,10 @@
 import streamlit as st
+from io import BytesIO
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 from motor.calculadora import calcular_declaracion, topes_obligacion_declarar
 from motor.reglas_2026 import UVT_2026
@@ -85,6 +91,101 @@ def campo_checkbox(label, campo_key, default=False, ayuda=""):
     if w_key not in st.session_state:
         st.session_state[w_key] = st.session_state.datos.get(campo_key, default)
     st.checkbox(label, key=w_key, help=ayuda or None, on_change=guardar_todo)
+
+# ----------------------------------------------------------------------
+# Generación del PDF de resultados
+# ----------------------------------------------------------------------
+def generar_pdf_resultado(r, datos_personales) -> BytesIO:
+    """Arma un PDF con el mismo desglose que se muestra en pantalla."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=1.5 * cm, bottomMargin=1.5 * cm)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("Resumen Tributario Estimado", styles["Title"]))
+    story.append(Paragraph("Generado con Declaración Simple — no reemplaza tu declaración oficial", styles["Italic"]))
+    story.append(Spacer(1, 0.4 * cm))
+
+    nombre = datos_personales.get("dp_nombre") or "(sin nombre)"
+    doc_ident = datos_personales.get("dp_num_doc") or "(sin documento)"
+    story.append(Paragraph(f"<b>Contribuyente:</b> {nombre}", styles["Normal"]))
+    story.append(Paragraph(f"<b>Documento:</b> {doc_ident}", styles["Normal"]))
+    story.append(Paragraph(f"<b>UVT utilizada:</b> $ {r['uvt']:,.0f}", styles["Normal"]))
+    story.append(Spacer(1, 0.4 * cm))
+
+    def tabla(titulo, filas):
+        story.append(Paragraph(titulo, styles["Heading3"]))
+        data = [["Concepto", "Valor"]] + filas
+        t = Table(data, colWidths=[11 * cm, 5 * cm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F2F4F8")]),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 0.35 * cm))
+
+    p = r["patrimonio"]
+    tabla("1. Patrimonio Líquido", [
+        ["Activos", f"$ {p['total_activos']:,.0f}"],
+        ["Pasivos", f"$ {p['total_pasivos']:,.0f}"],
+        ["Patrimonio líquido", f"$ {p['patrimonio_liquido']:,.0f}"],
+    ])
+
+    ing = r["ingresos"]
+    tabla("2. Depuración de Ingresos", [
+        ["Ingresos brutos", f"$ {ing['ingresos_brutos']:,.0f}"],
+        ["(-) Aportes salud/pensión", f"$ {ing['incr']:,.0f}"],
+        ["(-) Costos y gastos del negocio (Art. 107)", f"$ {ing['costos_gastos_deducibles']:,.0f}"],
+        ["= Ingreso neto", f"$ {ing['renta_neta']:,.0f}"],
+    ])
+
+    d = r["deducciones"]
+    tabla("3. Deducciones y Rentas Exentas (tope 40% / 1.340 UVT)", [
+        ["Dependientes, 10% ingreso (Art. 387)", f"$ {d['dependientes_10pct']:,.0f}"],
+        ["Medicina prepagada (Art. 387)", f"$ {d['prepagada_deducible']:,.0f}"],
+        ["Intereses de vivienda (Art. 119)", f"$ {d['intereses_deducibles']:,.0f}"],
+        ["50% del 4x1000 (Art. 115)", f"$ {d['gmf_deducible']:,.0f}"],
+        ["1% facturas electrónicas (Art. 336-5)", f"$ {d['facturas_deducible']:,.0f}"],
+        ["AFC + pensión voluntaria (Art. 126-1/126-4)", f"$ {d['afc_pension_aceptado']:,.0f}"],
+        ["25% renta exenta laboral (Art. 206-10)", f"$ {d['exenta_25']:,.0f}"],
+        ["Aceptado (tras tope del 40%/1.340 UVT)", f"$ {d['aceptado']:,.0f}"],
+        ["Deducción adicional dependientes, 72 UVT c/u (fuera del tope)", f"$ {d['dependientes_extra_72uvt']:,.0f}"],
+    ])
+
+    story.append(Paragraph(f"<b>Renta Líquida Gravable: $ {r['renta_liquida_gravable']:,.0f}</b>", styles["Heading2"]))
+    story.append(Spacer(1, 0.3 * cm))
+
+    imp = r["impuesto"]
+    tabla("5. Impuesto de Renta (Art. 241 E.T.)", [
+        ["Impuesto calculado", f"$ {imp['impuesto_pesos']:,.0f}"],
+        ["Descuento por donaciones (Art. 257)", f"$ {imp['descuento_donaciones']:,.0f}"],
+        ["Impuesto neto de renta", f"$ {imp['impuesto_neto_final']:,.0f}"],
+    ])
+
+    a = r["anticipo"]
+    tabla("6. Anticipo y Retenciones (Art. 807 E.T.)", [
+        ["Retenciones en la fuente", f"$ {a['retenciones']:,.0f}"],
+        ["Anticipo pagado el año anterior", f"$ {a['anticipo_anterior']:,.0f}"],
+        ["Anticipo calculado para el próximo año", f"$ {a['anticipo_a_pagar']:,.0f}"],
+    ])
+
+    etiqueta_total = "TOTAL ESTIMADO A PAGAR" if r["total_a_pagar"] >= 0 else "TOTAL ESTIMADO A FAVOR"
+    story.append(Paragraph(f"<b>{etiqueta_total}: $ {abs(r['total_a_pagar']):,.0f}</b>", styles["Heading1"]))
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph(
+        "Cálculo estimado con fines educativos, basado en el Estatuto Tributario vigente. "
+        "No reemplaza tu declaración oficial ni el software autorizado por la DIAN.",
+        styles["Italic"],
+    ))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
 
 # ----------------------------------------------------------------------
 # Navegación
@@ -385,6 +486,13 @@ elif seccion == "10. Resultados":
         c1.metric("Activos", f"$ {r['patrimonio']['total_activos']:,.0f}")
         c2.metric("Pasivos", f"$ {r['patrimonio']['total_pasivos']:,.0f}")
         c3.metric("Patrimonio líquido", f"$ {r['patrimonio']['patrimonio_liquido']:,.0f}")
+        with st.expander("¿De dónde salió este valor?"):
+            p = r["patrimonio"]
+            st.markdown(f"""
+- Casas, aptos o lotes + Dinero en bancos + Carros/motos = **Activos: $ {p['total_activos']:,.0f}** (Art. 267 y 261 E.T.)
+- Deudas con bancos + Deudas con terceros = **Pasivos: $ {p['total_pasivos']:,.0f}** (Art. 283 y 770 E.T.)
+- Activos − Pasivos = **Patrimonio líquido: $ {p['patrimonio_liquido']:,.0f}**
+""")
 
         st.subheader("2. Depuración de Ingresos")
         ing = r["ingresos"]
@@ -417,6 +525,13 @@ elif seccion == "10. Resultados":
 
         st.subheader("Renta Líquida Gravable")
         st.metric("", f"$ {r['renta_liquida_gravable']:,.0f}")
+        with st.expander("¿De dónde salió este valor?"):
+            st.markdown(f"""
+- Ingreso neto: **$ {ing['renta_neta']:,.0f}**
+- Menos deducciones y rentas exentas aceptadas (tope 40%/1.340 UVT): **− $ {d['aceptado']:,.0f}**
+- Menos deducción adicional por dependientes, 72 UVT c/u (Art. 387, fuera del tope): **− $ {d['dependientes_extra_72uvt']:,.0f}**
+- = **Renta Líquida Gravable: $ {r['renta_liquida_gravable']:,.0f}**
+""")
 
         st.subheader("5. Impuesto de Renta (Art. 241 E.T.)")
         imp = r["impuesto"]
@@ -435,11 +550,25 @@ elif seccion == "10. Resultados":
 
         etiqueta_total = "TOTAL ESTIMADO A PAGAR" if r["total_a_pagar"] >= 0 else "TOTAL ESTIMADO A FAVOR"
         st.success(f"### {etiqueta_total}: $ {abs(r['total_a_pagar']):,.0f}")
+        with st.expander("¿De dónde salió este valor?"):
+            st.markdown(f"""
+- Impuesto neto de renta (Art. 241 E.T., ya con descuento por donaciones): **$ {imp['impuesto_neto_final']:,.0f}**
+- Menos retenciones en la fuente del año: **− $ {a['retenciones']:,.0f}**
+- Menos anticipo pagado el año anterior: **− $ {a['anticipo_anterior']:,.0f}**
+- = {etiqueta_saldo}: **$ {abs(a['saldo_impuesto_actual']):,.0f}**
+- Más anticipo calculado para el próximo año (Art. 807 E.T., {int(a['porcentaje_anticipo'] * 100)}%): **+ $ {a['anticipo_a_pagar']:,.0f}**
+- = **{etiqueta_total}: $ {abs(r['total_a_pagar']):,.0f}**
+""")
 
         st.caption("Cálculo estimado con fines educativos, basado en el Estatuto Tributario vigente. "
                    "No reemplaza tu declaración oficial ni el software autorizado por la DIAN.")
 
         st.divider()
+        pdf_buffer = generar_pdf_resultado(r, {c: obtener(c) for c in CAMPOS_DATOS_PERSONALES})
+        st.download_button(
+            "📄 Descargar resultado en PDF", data=pdf_buffer,
+            file_name="resumen_tributario.pdf", mime="application/pdf",
+        )
         if st.button("💾 Guardar esta declaración"):
             doc = obtener("dp_num_doc", "")
             if doc:
